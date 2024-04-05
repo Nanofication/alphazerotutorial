@@ -50,6 +50,45 @@ def is_board_full(board):
     """
     return sum(board.flatten()==0) == 0
 
+def is_win(board, player):
+    """
+    Check if player or other player won with pieces following
+    Top left to bottom left
+    Bottom left to top left
+    Vertical
+    Row
+    :param board: Connect 4 Board
+    :param player: Player or Opponent
+    :return: True if player won else False
+    """
+    # Vertical Win
+    for column in range(COL_COUNT):
+        # for row in range(ROW_COUNT):
+        #     return board[column, range(row,row+4)] == player
+        for row in range(3): # go from 2nd index
+            if board[row, column] == board[row+1, column] == board[row+2, column] == board[row+3, column] == player:
+                return True
+
+    # Horizontal Win
+    for row in range(ROW_COUNT):
+        for column in range(4): # 4 Elements not index
+            if board[row, column] == board[row, column+1] == board[row, column+2] == board[row, column+3] == player:
+                return True
+
+    # Diagonal top left to bottom right
+    for row in range(3): # Don't need to check whole board, only portion that can fit 4 diagonals
+        for column in range(4):
+            if board[row, column] == board[row+1, column+1] == board[row+2,column+2] == board[row+3, column+3] == player:
+                return True
+    # Diagonal bottom left to top right
+    for row in range(5,2,-1): # Don't need to check whole board, only portion that can fit 4 diagonals
+        for column in range(4):
+            if board[row, column] == board[row-1, column+1] == board[row-2,column+2] == board[row-3, column+3] == player:
+                return True
+
+
+    return False
+
 if __name__ == '__main__':
     board = get_init_board()
     board = place_piece(board, player=1, action=3)

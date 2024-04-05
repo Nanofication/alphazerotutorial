@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
+  <component name="BookmarkManager">
+    <bookmark url="file://$PROJECT_DIR$/alpha_zero_connect4.py" line="69" mnemonic="3" />
+  </component>
   <component name="ChangeListManager">
     <list default="true" id="e74b4cef-befb-4509-958f-19b881d93518" name="Default" comment="">
       <change type="MODIFICATION" beforePath="$PROJECT_DIR$/alpha_zero_connect4.py" afterPath="$PROJECT_DIR$/alpha_zero_connect4.py" />
@@ -46,8 +49,8 @@
       <file leaf-file-name="alpha_zero_connect4.py" pinned="false" current-in-tab="true">
         <entry file="file://$PROJECT_DIR$/alpha_zero_connect4.py">
           <provider selected="true" editor-type-id="text-editor">
-            <state relative-caret-position="341">
-              <caret line="50" column="39" lean-forward="false" selection-start-line="50" selection-start-column="39" selection-end-line="50" selection-end-column="39" />
+            <state relative-caret-position="460">
+              <caret line="88" column="0" lean-forward="true" selection-start-line="88" selection-start-column="0" selection-end-line="88" selection-end-column="0" />
               <folding />
             </state>
           </provider>
@@ -432,7 +435,7 @@
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>
-      <option name="time" value="1" />
+      <option name="time" value="2" />
     </breakpoint-manager>
     <watches-manager />
   </component>
@@ -599,8 +602,8 @@
     </entry>
     <entry file="file://$PROJECT_DIR$/alpha_zero_connect4.py">
       <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="341">
-          <caret line="50" column="39" lean-forward="false" selection-start-line="50" selection-start-column="39" selection-end-line="50" selection-end-column="39" />
+        <state relative-caret-position="460">
+          <caret line="88" column="0" lean-forward="true" selection-start-line="88" selection-start-column="0" selection-end-line="88" selection-end-column="0" />
           <folding />
         </state>
       </provider>
