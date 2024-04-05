@@ -6,12 +6,15 @@ import numpy as np
 #4. is board full
 #5 is win
 
+ROW_COUNT = 6 # Num of rows
+COL_COUNT = 7 # Num of columns
+
 def get_init_board():
     """
     Initialize Connect 4 Board
     :return: Board represented as numpy array 7 length, 6 height or width
     """
-    return np.zeros((6,7))
+    return np.zeros((ROW_COUNT,COL_COUNT))
 
 def place_piece(board, player, action):
     """
@@ -29,8 +32,31 @@ def place_piece(board, player, action):
     board[row_index, action] = player # Update board if player made move +1, if opponent, -1
     return board
 
+def get_valid_moves(board):
+    # Return list of valid moves on the board
+    # return [0,1,1,1,0,1,1] 0 is invalid 1 is valid
+    valid_moves = [0] * COL_COUNT
+    for column in range(COL_COUNT):
+        if sum(board[:,column] == 0) > 0:
+            valid_moves[column] = 1
+
+    return valid_moves
+
+def is_board_full(board):
+    """
+    Check if there's no spaces to place on the board
+    :param board:
+    :return:
+    """
+    return sum(board.flatten()==0) == 0
+
 if __name__ == '__main__':
     board = get_init_board()
     board = place_piece(board, player=1, action=3)
     board = place_piece(board, player=1, action=3)
+    board = place_piece(board, player=1, action=3)
+    board = place_piece(board, player=1, action=3)
+    board = place_piece(board, player=1, action=3)
+    board = place_piece(board, player=1, action=3)
     print(board)
+    print(get_valid_moves(board))
