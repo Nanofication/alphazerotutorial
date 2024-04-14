@@ -26,11 +26,11 @@ def place_piece(board, player, action):
     """
     # Connect 4 works by have pieces fall in the next unoccupied slot
     # If there's a piece, we find the slot above if available. That will be our free slot
-
-    row_index = sum(board[:, action] == 0) - 1 # Get all row dimensions for the action column to take. I.E. get how many rows are 0 for column index 3?
+    board_copy = np.copy(board)
+    row_index = sum(board_copy[:, action] == 0) - 1 # Get all row dimensions for the action column to take. I.E. get how many rows are 0 for column index 3?
     # If all empty, there are 6 slots. So sum 6, -1 = row index 5. Piece will appear on the 3,5 which is the last row 4th column
-    board[row_index, action] = player # Update board if player made move +1, if opponent, -1
-    return board
+    board_copy[row_index, action] = player # Update board if player made move +1, if opponent, -1
+    return board_copy
 
 def get_valid_moves(board):
     # Return list of valid moves on the board
