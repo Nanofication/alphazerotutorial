@@ -1,9 +1,11 @@
 import numpy as np
 import math
 import torch
-
+import matplotlib.pyplot as plt
 import torch.nn as nn
 import torch.nn.functional as F
+
+torch.manual_seed(0)
 
 class ResNet(nn.Module):
     def __init__(self, game, num_resBlocks, num_hidden):
@@ -18,8 +20,35 @@ class ResNet(nn.Module):
         )
 
         self.backBone = nn.ModuleList(
-            [] # Array of different rest blocks
+            [ResBlock(num_hidden) for i in range(num_resBlocks)] # Array of different rest blocks
         )
+
+        self.policyHead = nn.Sequential(
+            nn.Conv2d(num_hidden, 32, kernel_size=3, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.Flatten(),
+            nn.Linear(32 * game.row_count * game.column_count, game.action_size)
+        )
+
+        self.valueHead = nn.Sequential(
+            nn.Conv2d(num_hidden, 3, kernel_size=3, padding=1),
+            nn.BatchNorm2d(3),
+            nn.ReLU(),
+            nn.Flatten(),
+            nn.Linear(3 * game.row_count * game.column_count, 1),
+            nn.Tanh()
+        )
+
+    def forward(self,x):
+        x = self.startBlock(x)
+        for resBlock in self.backBone:
+            x = resBlock(x)
+
+        policy = self.policyHead(x)
+        value = self.valueHead(x)
+
+        return policy, value
 
 # Convolution is math operation help extract features from an image like edges, shapes or patterns
 
@@ -235,44 +264,79 @@ class TicTacToe:
     def change_perspective(self, state, player):
         return state * player
 
+    def get_encoded_state(self, state):
+        encoded_state = np.stack(
+            (state == -1, state ==0, state == 1)
+        ).astype(np.float32)
+
+        return encoded_state
+
 if __name__ == '__main__':
     tictactoe = TicTacToe()
-    player = 1
 
-    args = {
-        'C': 1.41,
-        'num_searches': 1000
-    }
-
-    mcts = MCTS(tictactoe, args)
     state = tictactoe.get_initial_state()
+    state = tictactoe.get_next_state(state, 2, 1)
+    state = tictactoe.get_next_state(state, 7, -1)
 
-    while True:
-        print(state)
+    print(state)
 
-        if player == 1:
-            valid_moves = tictactoe.get_valid_moves(state)
-            print("valid moves", [i for i in range(tictactoe.action_size) if valid_moves[i] == 1])
-            action = int(input(f"{player}:"))
+    encoded_state = tictactoe.get_encoded_state(state) # Have states where player played, where opponent played and where no plays have been done yet
 
-            if valid_moves[action] == 0:
-                print("action not valid")
-                continue
-        else:
-            neutral_state = tictactoe.change_perspective(state, player)
-            mcts_probs = mcts.search(neutral_state)
-            action = np.argmax(mcts_probs) # return child
+    print(encoded_state)
 
-        state = tictactoe.get_next_state(state, action, player)
+    # Turn state to tensor
 
-        value, is_terminal = tictactoe.get_value_and_terminated(state, action)
+    tensor_state = torch.tensor(encoded_state).unsqueeze(0) # Create further bracket on encoded state and pass through model
 
-        if is_terminal:
-            print(state)
-            if value == 1:
-                print(player, "Won!")
-            else:
-                print("Draw")
-            break
+    model = ResNet(tictactoe, 4, 64)
 
-        player = tictactoe.get_opponent(player)
+    policy, value = model(tensor_state)
+    value = value.item()
+    policy = torch.softmax(policy, axis=1).squeeze(0).detach().cpu().numpy() # don't apply on other axis
+
+    print(value, policy)
+
+    # plt.bar(range(tictactoe.action_size), policy)
+    # plt.show()
+
+    # MCTS Example
+    # tictactoe = TicTacToe()
+    # player = 1
+    #
+    # args = {
+    #     'C': 1.41,
+    #     'num_searches': 1000
+    # }
+    #
+    # mcts = MCTS(tictactoe, args)
+    # state = tictactoe.get_initial_state()
+    #
+    # while True:
+    #     print(state)
+    #
+    #     if player == 1:
+    #         valid_moves = tictactoe.get_valid_moves(state)
+    #         print("valid moves", [i for i in range(tictactoe.action_size) if valid_moves[i] == 1])
+    #         action = int(input(f"{player}:"))
+    #
+    #         if valid_moves[action] == 0:
+    #             print("action not valid")
+    #             continue
+    #     else:
+    #         neutral_state = tictactoe.change_perspective(state, player)
+    #         mcts_probs = mcts.search(neutral_state)
+    #         action = np.argmax(mcts_probs) # return child
+    #
+    #     state = tictactoe.get_next_state(state, action, player)
+    #
+    #     value, is_terminal = tictactoe.get_value_and_terminated(state, action)
+    #
+    #     if is_terminal:
+    #         print(state)
+    #         if value == 1:
+    #             print(player, "Won!")
+    #         else:
+    #             print("Draw")
+    #         break
+    #
+    #     player = tictactoe.get_opponent(player)
