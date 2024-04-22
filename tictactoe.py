@@ -71,22 +71,24 @@ class ResBlock(nn.Module):
 
 class Node:
     # Define Monte Carlo Tree Search Node
-    def __init__(self, game, args, state, parent=None, action_taken=None):
+    def __init__(self, game, args, state, parent=None, action_taken=None, prior=0):
         # Game and arguments from MCTS
         self.game = game
         self.args = args
         self.state = state
         self.parent = parent
         self.action_taken = action_taken
+        self.prior = prior # Probability that was initiated in the child node. Probability to land if go down from parent
 
         self.children = [] # children of the node
-        self.expandable_moves = game.get_valid_moves(state) # Which ways to expand further from the node? Next steps to take from current point
+        # self.expandable_moves = game.get_valid_moves(state) #  Only for MCTS Which ways to expand further from the node? Next steps to take from current point
 
         self.visit_count = 0
         self.value_sum = 0 # Later for UCB method MCTS's main calculation
 
     def is_fully_expanded(self):
-        return np.sum(self.expandable_moves) == 0 and len(self.children) > 0
+        # return np.sum(self.expandable_moves) == 0 and len(self.children) > 0 # MCTS
+        return len(self.children) > 0 # For Alpha Zero Deep Q Learning
 
     def select(self):
         """
@@ -97,7 +99,8 @@ class Node:
         best_ucb = -np.inf
 
         for child in self.children:
-            ucb = self.get_ucb(child)
+            # ucb = self.get_ucb(child)
+            ucb = self.get_ucb_alphazero(child)
             if ucb > best_ucb:
                 best_child = child
                 best_ucb = ucb
@@ -115,6 +118,14 @@ class Node:
         # Find opponent's value and if it opponent makes bad move, it's very good for us player so 1 - (next move)
 
         return q_value + self.args['C'] * math.sqrt(math.log(self.visit_count) / child.visit_count)
+
+    def get_ucb_alphazero(self, child):
+        if child.visit_count == 0:
+            q_value = 0
+        else:
+            q_value = 1 - ((child.value_sum / child.visit_count) + 1) / 2
+
+        return q_value + self.args['C'] * (math.sqrt(self.visit_count) / (child.visit_count + 1)) * child.prior
 
     def expand(self):
         """
@@ -134,6 +145,24 @@ class Node:
         self.children.append(child)
 
         return child
+
+    def expandDql(self, policy):
+        """
+        How expand, sample possible moves. Create new state for our parent
+        Append to list of children nodes
+        :return:
+        """
+        for action, prob in enumerate(policy):
+            if prob > 0:
+                child_state = self.state.copy()
+                child_state = self.game.get_next_state(child_state, action, 1) # We will never change the player. Never give node info of player. Change state of child
+                # Perceive the opponent
+
+                child_state = self.game.change_perspective(child_state, player=-1) # Assume you're playing against opponent
+                child = Node(self.game, self.args, child_state, self, action, prob)
+                self.children.append(child)
+
+        return child # you can delete this?
 
     def simulate(self):
         value, is_terminal = self.game.get_value_and_terminated(self.state, self.action_taken) # Have to flip to opponent perspective
@@ -169,10 +198,12 @@ class Node:
 
 class MCTS:
 
-    def __init__(self, game, args):
+    def __init__(self, game, args, model):
         self.game = game
         self.args = args
+        self.model = model
 
+    @torch.no_grad()
     def search(self, state):
         # Define root node
         root = Node(self.game, self.args, state)
@@ -188,10 +219,24 @@ class MCTS:
             value = self.game.get_opponent_value(value)
 
             if not is_terminal:
-                # expansion
-                node = node.expand()
-                # simulation
-                value = node.simulate()
+                # Use Model
+                policy, value = self.model(
+                    torch.tensor(self.game.get_encoded_state(node.state)).unsqueeze(0) # turn into a tensor
+                )
+                policy = torch.softmax(policy, axis=1).squeeze(0).cpu().numpy() # apply on input of 9 neurons (tic tac toe inputs)
+                valid_moves = self.game.get_valid_moves(node.state) # Get all valid moves
+                policy *= valid_moves #
+                policy /= np.sum(policy) # Rescale policy each number to percentages
+
+                value = value.item() # Use for backpropogation
+
+                # expansion MCTS
+                # node = node.expand()
+                node = node.expandDql(policy)
+
+
+                # simulation MCTS
+                # value = node.simulate()
             # backpropogation
             node.backpropogate(value)
 
@@ -273,28 +318,73 @@ class TicTacToe:
 
 if __name__ == '__main__':
     tictactoe = TicTacToe()
+    player = 1
 
-    state = tictactoe.get_initial_state()
-    state = tictactoe.get_next_state(state, 2, 1)
-    state = tictactoe.get_next_state(state, 7, -1)
-
-    print(state)
-
-    encoded_state = tictactoe.get_encoded_state(state) # Have states where player played, where opponent played and where no plays have been done yet
-
-    print(encoded_state)
-
-    # Turn state to tensor
-
-    tensor_state = torch.tensor(encoded_state).unsqueeze(0) # Create further bracket on encoded state and pass through model
+    args = {
+        'C': 2,
+        'num_searches': 1000
+    }
 
     model = ResNet(tictactoe, 4, 64)
+    model.eval()
 
-    policy, value = model(tensor_state)
-    value = value.item()
-    policy = torch.softmax(policy, axis=1).squeeze(0).detach().cpu().numpy() # don't apply on other axis
+    mcts = MCTS(tictactoe, args, model)
 
-    print(value, policy)
+    state = tictactoe.get_initial_state()
+
+    while True:
+        print(state)
+
+        if player == 1:
+            valid_moves = tictactoe.get_valid_moves(state)
+            print("valid moves", [i for i in range(tictactoe.action_size) if valid_moves[i] == 1])
+            action = int(input(f"{player}:"))
+
+            if valid_moves[action] == 0:
+                print("action not valid")
+                continue
+        else:
+            neutral_state = tictactoe.change_perspective(state, player)
+            mcts_probs = mcts.search(neutral_state)
+            action = np.argmax(mcts_probs) # return child
+
+        state = tictactoe.get_next_state(state, action, player)
+
+        value, is_terminal = tictactoe.get_value_and_terminated(state, action)
+
+        if is_terminal:
+            print(state)
+            if value == 1:
+                print(player, "Won!")
+            else:
+                print("Draw")
+            break
+
+        player = tictactoe.get_opponent(player)
+
+
+
+    # state = tictactoe.get_initial_state()
+    # state = tictactoe.get_next_state(state, 2, 1)
+    # state = tictactoe.get_next_state(state, 7, -1)
+    #
+    # print(state)
+    #
+    # encoded_state = tictactoe.get_encoded_state(state) # Have states where player played, where opponent played and where no plays have been done yet
+    #
+    # print(encoded_state)
+    #
+    # # Turn state to tensor
+    #
+    # tensor_state = torch.tensor(encoded_state).unsqueeze(0) # Create further bracket on encoded state and pass through model
+    #
+    # model = ResNet(tictactoe, 4, 64)
+    #
+    # policy, value = model(tensor_state)
+    # value = value.item()
+    # policy = torch.softmax(policy, axis=1).squeeze(0).detach().cpu().numpy() # don't apply on other axis
+    #
+    # print(value, policy)
 
     # plt.bar(range(tictactoe.action_size), policy)
     # plt.show()
@@ -304,7 +394,7 @@ if __name__ == '__main__':
     # player = 1
     #
     # args = {
-    #     'C': 1.41,
+    #     'C': 2,
     #     'num_searches': 1000
     # }
     #
