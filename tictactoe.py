@@ -4,15 +4,20 @@ import torch
 import matplotlib.pyplot as plt
 import torch.nn as nn
 import torch.nn.functional as F
+import random
+
+from tqdm.notebook import trange
 
 torch.manual_seed(0)
 
 class ResNet(nn.Module):
-    def __init__(self, game, num_resBlocks, num_hidden):
+    def __init__(self, game, num_resBlocks, num_hidden, device):
         # resBlocks number of blocks in state
         # num_hidden - hidden layer node
 
         super().__init__()
+        self.device = device
+
         self.startBlock = nn.Sequential(
             nn.Conv2d(3, num_hidden, kernel_size=3, padding=1),
             nn.BatchNorm2d(num_hidden),
@@ -39,6 +44,8 @@ class ResNet(nn.Module):
             nn.Linear(3 * game.row_count * game.column_count, 1),
             nn.Tanh()
         )
+
+        self.to(self.device)
 
     def forward(self,x):
         x = self.startBlock(x)
@@ -71,7 +78,7 @@ class ResBlock(nn.Module):
 
 class Node:
     # Define Monte Carlo Tree Search Node
-    def __init__(self, game, args, state, parent=None, action_taken=None, prior=0):
+    def __init__(self, game, args, state, parent=None, action_taken=None, prior=0, visit_count=0):
         # Game and arguments from MCTS
         self.game = game
         self.args = args
@@ -83,7 +90,7 @@ class Node:
         self.children = [] # children of the node
         # self.expandable_moves = game.get_valid_moves(state) #  Only for MCTS Which ways to expand further from the node? Next steps to take from current point
 
-        self.visit_count = 0
+        self.visit_count = visit_count
         self.value_sum = 0 # Later for UCB method MCTS's main calculation
 
     def is_fully_expanded(self):
@@ -206,8 +213,19 @@ class MCTS:
     @torch.no_grad()
     def search(self, state):
         # Define root node
-        root = Node(self.game, self.args, state)
+        root = Node(self.game, self.args, state, visit_count=1)
 
+        policy, _ = self.model(
+            torch.tensor(self.game.get_encoded_state(state), device=self.model.device).unsqueeze(0)
+        )
+        policy = torch.softmax(policy, axis=1).squeeze(0).cpu().numpy()
+        policy = (1 - self.args['dirichlet_epsilon']) * policy + self.args['dirichlet_epsilon'] \
+                                    * np.random.dirichlet([self.args['dirichlet_alpha']] * self.game.action_size)
+
+        valid_moves = self.game.get_valid_moves(state)
+        policy *= valid_moves
+        policy /= np.sum(policy)
+        root.expandDql(policy)
 
         for search in range(self.args['num_searches']):
             node = root
@@ -221,9 +239,10 @@ class MCTS:
             if not is_terminal:
                 # Use Model
                 policy, value = self.model(
-                    torch.tensor(self.game.get_encoded_state(node.state)).unsqueeze(0) # turn into a tensor
+                    torch.tensor(self.game.get_encoded_state(node.state), device=self.model.device).unsqueeze(0) # turn into a tensor
                 )
-                policy = torch.softmax(policy, axis=1).squeeze(0).cpu().numpy() # apply on input of 9 neurons (tic tac toe inputs)
+                policy = torch.softmax(policy, axis=1).squeeze(0).cpu().numpy() # apply on input of 9 neurons (tic tac toe inputs) Comment to try GPU
+                # policy = torch.softmax(policy, axis=1).squeeze(0).numpy()
                 valid_moves = self.game.get_valid_moves(node.state) # Get all valid moves
                 policy *= valid_moves #
                 policy /= np.sum(policy) # Rescale policy each number to percentages
@@ -316,78 +335,192 @@ class TicTacToe:
 
         return encoded_state
 
+class AlphaZero:
+    def __init__(self, model, optimizer, game, args):
+        self.model = model
+        self.optimizer = optimizer
+        self.game = game
+        self.args = args
+        self.mcts = MCTS(game, args, model)
+
+    def selfPlay(self):
+        memory = []
+        player = 1
+        state = self.game.get_initial_state()
+
+        # First call MCTS
+        # Get action probabilities
+        # Set Action
+        # Use Action to play, get a new state
+        # Check if this state is terminal or not
+
+        while True:
+            # when call MCTS we're always player 1
+            neutral_state = self.game.change_perspective(state, player)
+            action_probs = self.mcts.search(neutral_state)
+
+            memory.append((neutral_state, action_probs, player))
+
+            temperature_action_probs = action_probs ** (1 / self.args['temperature'])# Sometimes we want to explore more over exploit. Higher to infinity, more you just choose a random action
+            temperature_action_probs /= np.sum(temperature_action_probs)
+            action = np.random.choice(self.game.action_size, p=temperature_action_probs) # Select action based on probability. Sometimes we want to explore more
+
+            state = self.game.get_next_state(state, action, player)
+
+            value, is_terminal = self.game.get_value_and_terminated(state, action) # Get updated state and action
+
+            if is_terminal:
+                returnMemory = []
+                for hist_neutral_state, hist_action_probs, hist_player in memory:
+                    hist_outcome = value if hist_player == player else self.game.get_opponent_value(value)
+                    returnMemory.append((
+                        self.game.get_encoded_state(hist_neutral_state),
+                        hist_action_probs,
+                        hist_outcome
+                    ))
+                return returnMemory
+
+            player = self.game.get_opponent(player)
+
+    def train(self, memory):
+        random.shuffle(memory)
+
+        for batchIdx in range(0, len(memory), self.args['batch_size']):
+            sample = memory[batchIdx: min(len(memory) - 1, batchIdx + self.args['batch_size'])]
+            state, policy_targets, value_targets = zip(*sample) # Transpose our list. * basically transposes the 3 lists
+
+            state, policy_targets, value_targets = np.array(state), np.array(policy_targets), np.array(value_targets).reshape(-1, 1)
+
+            state = torch.tensor(state, dtype=torch.float32, device=self.model.device)
+            policy_targets = torch.tensor(policy_targets, dtype=torch.float32, device=self.model.device)
+            value_targets = torch.tensor(value_targets, dtype=torch.float32, device=self.model.device)
+
+            out_policy, out_value = self.model(state)
+            policy_loss = F.cross_entropy(out_policy, policy_targets)
+            value_loss = F.mse_loss(out_value, value_targets)
+
+            loss = policy_loss + value_loss
+
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
+
+
+    def learn(self):
+        # Self play, get data, train, self play again
+        for iteration in range(self.args['num_iterations']):
+            # Create memory class
+            memory = []
+
+            self.model.eval()
+            for selfPlay_iteration in range(self.args['num_selfPlay_iterations']):
+                memory += self.selfPlay()
+
+            self.model.train()
+            for epoch in range(self.args['num_epochs']):
+                self.train(memory)
+
+            torch.save(self.model.state_dict(), f"model_{iteration}.pt")
+            torch.save(self.optimizer.state_dict(), f"optimizer_{iteration}.pt")
+
 if __name__ == '__main__':
+    if torch.cuda.is_available():
+        device = torch.device('cuda')
+    else:
+        device = torch.device('cpu')
+
     tictactoe = TicTacToe()
-    player = 1
-
-    args = {
-        'C': 2,
-        'num_searches': 1000
-    }
-
-    model = ResNet(tictactoe, 4, 64)
-    model.eval()
-
-    mcts = MCTS(tictactoe, args, model)
-
-    state = tictactoe.get_initial_state()
-
-    while True:
-        print(state)
-
-        if player == 1:
-            valid_moves = tictactoe.get_valid_moves(state)
-            print("valid moves", [i for i in range(tictactoe.action_size) if valid_moves[i] == 1])
-            action = int(input(f"{player}:"))
-
-            if valid_moves[action] == 0:
-                print("action not valid")
-                continue
-        else:
-            neutral_state = tictactoe.change_perspective(state, player)
-            mcts_probs = mcts.search(neutral_state)
-            action = np.argmax(mcts_probs) # return child
-
-        state = tictactoe.get_next_state(state, action, player)
-
-        value, is_terminal = tictactoe.get_value_and_terminated(state, action)
-
-        if is_terminal:
-            print(state)
-            if value == 1:
-                print(player, "Won!")
-            else:
-                print("Draw")
-            break
-
-        player = tictactoe.get_opponent(player)
-
-
-
-    # state = tictactoe.get_initial_state()
-    # state = tictactoe.get_next_state(state, 2, 1)
-    # state = tictactoe.get_next_state(state, 7, -1)
+    # model = ResNet(tictactoe, 4, 64, device)
+    # # model = model.to() #device=device
+    # optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=0.0001)
     #
-    # print(state)
+    # args = {
+    #     'C': 2,
+    #     'num_searches': 60,
+    #     'num_iterations': 3,
+    #     'num_selfPlay_iterations': 500,
+    #     'num_epochs': 4,
+    #     'batch_size': 64,
+    #     'temperature': 1.25,
+    #     'dirichlet_epsilon':  0.25,
+    #     'dirichlet_alpha': 0.3
     #
-    # encoded_state = tictactoe.get_encoded_state(state) # Have states where player played, where opponent played and where no plays have been done yet
+    # }
     #
-    # print(encoded_state)
+    # alphaZero = AlphaZero(model, optimizer, tictactoe, args)
+    # alphaZero.learn()
+
+    # tictactoe = TicTacToe()
+    # player = 1
     #
-    # # Turn state to tensor
-    #
-    # tensor_state = torch.tensor(encoded_state).unsqueeze(0) # Create further bracket on encoded state and pass through model
+    # args = {
+    #     'C': 2,
+    #     'num_searches': 1000
+    # }
     #
     # model = ResNet(tictactoe, 4, 64)
+    # model.eval()
     #
-    # policy, value = model(tensor_state)
-    # value = value.item()
-    # policy = torch.softmax(policy, axis=1).squeeze(0).detach().cpu().numpy() # don't apply on other axis
+    # mcts = MCTS(tictactoe, args, model)
     #
-    # print(value, policy)
+    # state = tictactoe.get_initial_state()
+    #
+    # while True:
+    #     print(state)
+    #
+    #     if player == 1:
+    #         valid_moves = tictactoe.get_valid_moves(state)
+    #         print("valid moves", [i for i in range(tictactoe.action_size) if valid_moves[i] == 1])
+    #         action = int(input(f"{player}:"))
+    #
+    #         if valid_moves[action] == 0:
+    #             print("action not valid")
+    #             continue
+    #     else:
+    #         neutral_state = tictactoe.change_perspective(state, player)
+    #         mcts_probs = mcts.search(neutral_state)
+    #         action = np.argmax(mcts_probs) # return child
+    #
+    #     state = tictactoe.get_next_state(state, action, player)
+    #
+    #     value, is_terminal = tictactoe.get_value_and_terminated(state, action)
+    #
+    #     if is_terminal:
+    #         print(state)
+    #         if value == 1:
+    #             print(player, "Won!")
+    #         else:
+    #             print("Draw")
+    #         break
+    #
+    #     player = tictactoe.get_opponent(player)
 
-    # plt.bar(range(tictactoe.action_size), policy)
-    # plt.show()
+
+
+    state = tictactoe.get_initial_state()
+    state = tictactoe.get_next_state(state, 2, -1)
+    state = tictactoe.get_next_state(state, 4, -1)
+    state = tictactoe.get_next_state(state, 6, 1)
+    state = tictactoe.get_next_state(state, 8, 1)
+
+    encoded_state = tictactoe.get_encoded_state(state) # Have states where player played, where opponent played and where no plays have been done yet
+
+    # Turn state to tensor
+
+    tensor_state = torch.tensor(encoded_state, device=device).unsqueeze(0) # Create further bracket on encoded state and pass through model
+
+    model = ResNet(tictactoe, 4, 64, device=device)
+    model.load_state_dict(torch.load('model_2.pt')) # Load trained model
+    model.eval()
+    print(state)
+    policy, value = model(tensor_state)
+    value = value.item()
+    policy = torch.softmax(policy, axis=1).squeeze(0).cpu().detach().numpy() # don't apply on other axis
+
+    print(value, policy)
+
+    plt.bar(range(tictactoe.action_size), policy)
+    plt.show()
 
     # MCTS Example
     # tictactoe = TicTacToe()
